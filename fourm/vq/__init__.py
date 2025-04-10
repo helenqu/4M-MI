@@ -3,7 +3,7 @@ import torch
 
 from .vqvae import VQ, VQVAE, DiVAE, VQControlNet
 from .scheduling import *
-
+import argparse
 
 def get_image_tokenizer(tokenizer_id: str, 
                         tokenizers_root: str = './tokenizer_ckpts', 
@@ -30,8 +30,9 @@ def get_image_tokenizer(tokenizer_id: str,
     
     if verbose:
         print(f'Loading tokenizer {tokenizer_id} ... ', end='')
-    
-    ckpt = torch.load(os.path.join(tokenizers_root, f'{tokenizer_id}.pth'), map_location='cpu')
+
+    # with torch.serialization.safe_globals([argparse.Namespace]):
+    ckpt = torch.load(os.path.join(tokenizers_root, f'{tokenizer_id}.pth'), map_location='cpu', weights_only=False)
 
     # Handle renamed arguments
     if 'CLIP' in ckpt['args'].domain or 'DINO' in ckpt['args'].domain or 'ImageBind' in ckpt['args'].domain:

@@ -277,6 +277,7 @@ def setup_data(args):
 
     # Set up shared modality info
     modality_info = setup_modality_info(args)
+    print(f"modality_info: {modality_info}")
 
     # Initialize (multiple) train loaders
     # Each train loader needs to be split by node if there are multiple
@@ -509,7 +510,7 @@ def main(args):
     print("Number of training steps = %d" % num_training_steps_per_epoch)
     print("Number of training examples per epoch = %d" % (batch_size_no_accum * num_training_steps_per_epoch))
 
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[global_rank], find_unused_parameters=args.find_unused_params)
     model_without_ddp = model.module
 
     optimizer = create_optimizer(args, model_without_ddp)

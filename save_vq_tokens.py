@@ -16,7 +16,9 @@ import datetime
 import os
 import random
 import time
+from pathlib import Path
 from typing import Optional
+import pdb
 
 import numpy as np
 import torch
@@ -26,6 +28,7 @@ from torch.utils.data import Dataset
 from torchvision.datasets import DatasetFolder
 from torchvision.datasets.folder import find_classes, make_dataset
 from tqdm import tqdm
+from webdataset.writer import numpy_dumps
 
 import fourm.utils as utils
 import fourm.utils.clip as clip
@@ -33,7 +36,7 @@ from fourm.data import CenterCropImageAugmenter, RandomCropImageAugmenter
 from fourm.data.modality_info import MODALITY_TRANSFORMS_DIVAE
 from fourm.vq import get_image_tokenizer
 import fourm.utils.clip as clip
-
+from fourm.data.dataset_utils import GroupedShardWriter
 FEATURE_TASKS = ['CLIP-B16', 'DINOv2-B14', 'DINOv2-B14-global']
 IMG_EXTENSIONS = (".jpg", ".jpeg", ".png", ".ppm", ".bmp", ".pgm", ".tif", ".tiff", ".webp", ".jpx", ".gif")
     
@@ -43,6 +46,14 @@ def find_image_extension(root_dir):
             if file:
                 return os.path.splitext(file)[1]
     return None
+
+def serialize_data(data: np.ndarray, dtype: Optional[str] = None) -> bytes:
+    # 4M requires tokenized data of shape B, N
+    data = data.reshape(1, -1)
+    # Cast with the right dtype to reduce memory footprint
+    if dtype is not None:
+        data = data.astype(dtype)
+    return numpy_dumps(data)
 
 class SaveVQDataset(Dataset):
     def __init__(self, 
@@ -154,9 +165,9 @@ class SaveVQDataset(Dataset):
                 settings.append((*crop_coords, 1 if h_flip else 0))
 
             settings = np.array(settings)
-            if not self.dryrun:
-                os.makedirs(os.path.dirname(crop_settings_path), exist_ok=True)
-                np.save(crop_settings_path, settings)
+            # if not self.dryrun:
+            #     os.makedirs(os.path.dirname(crop_settings_path), exist_ok=True)
+            #     np.save(crop_settings_path, settings)
 
         # Perform augmentations and optionally mask images
         imgs = []
@@ -183,10 +194,10 @@ class SaveVQDataset(Dataset):
             imgs.append(img_mod)
         imgs = torch.stack(imgs)
 
-        return imgs, tokens_path
+        return imgs, tokens_path, settings
 
 def get_feature_extractor(args):
-    if args.task == 'CLIP-B16':
+    if args.task == 'CLIP-B16' or args.task == 'rgb':
         teacher_model, _ = clip.load("ViT-B/16", device='cpu', jit=False)
         teacher_model = teacher_model.visual
         return teacher_model.eval()
@@ -214,7 +225,8 @@ def main(args):
     sampler_rank = global_rank
 
     loader_task = 'rgb' if args.task in FEATURE_TASKS else args.task
-    dataset = SaveVQDataset(root=os.path.join(args.data_root, args.split), crop_settings_dir='crop_settings', 
+    # dataset = SaveVQDataset(root=os.path.join(args.data_root, args.split), crop_settings_dir='crop_settings', 
+    dataset = SaveVQDataset(root=args.data_root, crop_settings_dir='crop_settings', 
                             tokens_dir=f'{args.task}_{args.folder_suffix}', task=loader_task,
                             min_crop_scale=args.min_crop_scale, n_crops=args.n_crops, 
                             input_size=args.input_size, mask_value=args.mask_value,
@@ -236,21 +248,30 @@ def main(args):
     else:
         pbar = None
 
-    for imgs_batch, tokens_paths in data_loader:
+    output_dir = Path(args.data_root) / f"{args.task}_{args.folder_suffix}"
+    writer = GroupedShardWriter(
+        str(output_dir),
+        [args.task, "crop_settings"],
+        "shard-%06d.tar",
+        maxcount=args.max_samples_per_shard,
+    )
+
+    for imgs_batch, tokens_paths, crop_settings in data_loader:
         
         # Filter out already saved images
-        imgs_batch_filtered, tokens_paths_filtered = [], []
-        for imgs, tokens_path in zip(imgs_batch, tokens_paths):
+        imgs_batch_filtered, tokens_paths_filtered, crop_settings_filtered = [], [], []
+        for imgs, tokens_path, crop_settings in zip(imgs_batch, tokens_paths, crop_settings):
             if not os.path.exists(tokens_path) or args.corrupt_samples_log is not None:
                 imgs_batch_filtered.append(imgs)
                 tokens_paths_filtered.append(tokens_path)
+                crop_settings_filtered.append(crop_settings)
         if len(imgs_batch_filtered) == 0:
             if pbar is not None:
                 pbar.update(1)
             continue
         imgs_batch = torch.stack(imgs_batch_filtered)
         tokens_paths = tokens_paths_filtered
-        
+        crop_settings = np.stack(crop_settings_filtered)
         
         # Merge batch and number of augmentation dimensions
         if 'semseg' in args.task:
@@ -259,49 +280,63 @@ def main(args):
             imgs_batch = rearrange(imgs_batch, 'b n c h w -> (b n) c h w')
         
         # For efficiency, process images with batch size that might be different from loader batch size or num augmentations
-        sub_batches = imgs_batch.split(args.batch_size, dim=0)
-        
-        all_tokens = []
-        
-        for sub_batch in sub_batches:
-            sub_batch = sub_batch.to(device)
-            
-            with torch.no_grad():
-                if 'CLIP' in args.task:
-                    B, C, H, W = sub_batch.shape
-                    P_H, P_W = feature_extractor.conv1.kernel_size
-                    N_H, N_W = H // P_H, W // P_W
-                    sub_batch = feature_extractor(sub_batch, return_final_tokens_no_cls=True)
-                    sub_batch = rearrange(sub_batch, 'b (nh nw) d -> b d nh nw', nh=N_H, nw=N_W)
-                if 'DINO' in args.task:
-                    B, C, H, W = sub_batch.shape
-                    P_H, P_W = feature_extractor.patch_embed.proj.kernel_size
-                    N_H, N_W = H // P_H, W // P_W
-                    sub_batch = feature_extractor(sub_batch, is_training=True)
-                    if 'global' in args.task:
-                        sub_batch = sub_batch['x_norm_clstoken']
-                        sub_batch = sub_batch.unsqueeze(2).unsqueeze(2)
-                    else:
-                        sub_batch = sub_batch['x_norm_patchtokens']
-                        sub_batch = rearrange(sub_batch, 'b (nh nw) d -> b d nh nw', nh=N_H, nw=N_W)
+        # sub_batches = imgs_batch.split(args.batch_size, dim=0)
+        # tokens_paths_batches = [tokens_paths[i:i + args.batch_size] for i in range(0, len(tokens_paths), args.batch_size)]
+        # crop_settings_batches = [crop_settings[i:i + args.batch_size] for i in range(0, len(crop_settings), args.batch_size)]
 
-                tokens = model.tokenize(sub_batch)
-                if tokens.size(-1)==1: # For the global embedding tokens, squeeze the last dimension
-                    tokens = tokens.squeeze(2)
-                tokens = rearrange(tokens, "b h w -> b (h w)")
-
-            tokens = tokens.detach().cpu().numpy().astype(np.int16)
-            all_tokens.append(tokens)
-            
-        all_tokens = np.concatenate(all_tokens)
-        all_tokens = rearrange(all_tokens, '(b n) d -> b n d', n=args.n_crops)
+        assert imgs_batch.shape[0] == len(tokens_paths) == crop_settings.shape[0], f"size mismatch! img batch size {imgs_batch.shape[0]}, tokens batch size {len(tokens_paths)}, crop settings batch size {crop_settings.shape[0]}"
+        imgs_batch = imgs_batch.to(device)
         
-        for tokens, tokens_path in zip(all_tokens, tokens_paths):
-            if args.dryrun:
-                print(f'Dryrun: rank {global_rank} -> {tokens_path}')
-            else:
-                np.save(tokens_path, tokens)
+        with torch.no_grad():
+            if 'CLIP' in args.task or 'rgb' in args.task:
+                B, C, H, W = imgs_batch.shape
+                P_H, P_W = feature_extractor.conv1.kernel_size
+                N_H, N_W = H // P_H, W // P_W
+                imgs_batch = feature_extractor(imgs_batch, return_final_tokens_no_cls=True)
+                imgs_batch = rearrange(imgs_batch, 'b (nh nw) d -> b d nh nw', nh=N_H, nw=N_W)
+            if 'DINO' in args.task:
+                B, C, H, W = imgs_batch.shape
+                P_H, P_W = feature_extractor.patch_embed.proj.kernel_size
+                N_H, N_W = H // P_H, W // P_W
+                imgs_batch = feature_extractor(imgs_batch, is_training=True)
+                if 'global' in args.task:
+                    imgs_batch = imgs_batch['x_norm_clstoken']
+                    imgs_batch = imgs_batch.unsqueeze(2).unsqueeze(2)
+                else:
+                    imgs_batch = imgs_batch['x_norm_patchtokens']
+                    imgs_batch = rearrange(imgs_batch, 'b (nh nw) d -> b d nh nw', nh=N_H, nw=N_W)
 
+            tokens = model.tokenize(imgs_batch)
+            if tokens.size(-1)==1: # For the global embedding tokens, squeeze the last dimension
+                tokens = tokens.squeeze(2)
+            tokens = rearrange(tokens, "b h w -> b (h w)")
+
+        tokens = tokens.detach().cpu().numpy().astype(np.int16)
+        tokens = rearrange(tokens, '(b n) d -> b n d', n=args.n_crops)
+
+        print(f"current batch size: {tokens.shape[0]}")
+        for j in range(tokens.shape[0]):
+            data_to_write = {
+                args.task: {
+                    "__key__": Path(tokens_paths[j]).name,
+                    "npy": serialize_data(tokens[j])
+                }
+            }
+            data_to_write.update(
+                {
+                    "crop_settings": {
+                        "__key__": Path(tokens_paths[j]).name,
+                        "npy": numpy_dumps(crop_settings[j])
+                    }
+                }
+            )
+            writer.write(data_to_write)
+        # for tokens, tokens_path in zip(all_tokens, tokens_paths):
+        #     if args.dryrun:
+        #         print(f'Dryrun: rank {global_rank} -> {tokens_path}')
+        #     else:
+        #         # np.save(tokens_path, tokens)
+        #         writer.write({'tokens': tokens, 'path': tokens_path})
         if pbar is not None:
             pbar.update(1)
 
@@ -310,7 +345,7 @@ def main(args):
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Tokenization time {}'.format(total_time_str))
-
+    writer.close()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog="VQ token saver")
@@ -330,6 +365,10 @@ if __name__ == '__main__':
     parser.add_argument(
         "--split", type=str, default='train',
         help="train or val"
+    )
+    parser.add_argument(
+        "--max_samples_per_shard", type=int, default=100_000,
+        help="Maximum number of samples per shard"
     )
     parser.add_argument(
         "--n_crops", type=int, default='1',

@@ -56,12 +56,12 @@ input_size_eval: 224
 domain: CLIP-B16
 imagenet_default_mean_and_std: True
 min_crop_scale: 0.2
-data_path: '/path/to/dataset' # Change me
-eval_data_path: '/path/to/eval_dataset' # Change me
+data_path: '/mnt/home/hqu10/ceph/test_4m_dataset' # Change me
+# eval_data_path: '/path/to/eval_dataset' # Change me
 
 # Wandb
 log_wandb: False # Set to True to log to Weights & Biases
 wandb_project: '4m-tokenizers'
 wandb_entity: null # Change if needed
 wandb_run_name: auto
-output_dir: 'output/auto'
+output_dir: '/mnt/home/hqu10/ceph/4m_outputs'

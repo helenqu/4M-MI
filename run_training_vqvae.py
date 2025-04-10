@@ -28,7 +28,7 @@ from typing import Dict, Iterable, List, Optional, Set, Union
 import yaml
 from PIL import Image
 from copy import deepcopy
-
+import pdb
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -394,7 +394,7 @@ def get_model(args: argparse.Namespace, device: Union[torch.device, str]) -> VQV
         latent_dim=args.latent_dim,
         norm_codes=args.norm_codes,
         norm_latents=args.norm_latents,
-        sync_codebook=True,
+        sync_codebook=args.distributed,
         ema_decay=args.quantizer_ema_decay,
         threshold_ema_dead_code=threshold_ema_dead_code,
         code_replacement_policy=args.code_replacement_policy,
@@ -661,7 +661,7 @@ def main(args: argparse.Namespace) -> None:
             data_loader_image_log = data_loader_val
 
     else:
-        data_loader_val, data_loader_metrics, dataset_image_log = None, None, None
+        data_loader_val, data_loader_metrics, dataset_image_log, data_loader_image_log = None, None, None, None
 
     if global_rank == 0 and args.log_wandb:
         # Edit run name and add tags
@@ -917,7 +917,7 @@ def prepare_inputs(x: Dict[str, torch.Tensor],
     # Extract features if needed
     if 'CLIP' in domain and feature_extractor is not None:
         B, C, H, W = images.shape
-        P_H, P_W = feature_extractor.module.conv1.kernel_size
+        P_H, P_W = feature_extractor.conv1.kernel_size
         N_H, N_W = H // P_H, W // P_W
         with torch.no_grad():
             images = feature_extractor(images, return_final_tokens_no_cls=True)

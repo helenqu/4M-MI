@@ -85,7 +85,7 @@ def build_fm_pretraining_dataset(
         modality_transforms["crop_settings"] = CropSettingsTransform()
 
     modality_paths = {mod: modality_info[mod]['path'] for mod in modality_info if modality_info[mod].get('path', None) is not None}
-    
+    print(f"modality_paths: {modality_paths}")
     return MultiModalDatasetFolder(root=data_path, modalities=modalities_without_vq, modality_paths=modality_paths,
                                    modality_transforms=modality_transforms, transform=transform)
 
