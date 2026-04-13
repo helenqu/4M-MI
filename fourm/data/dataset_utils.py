@@ -17,7 +17,7 @@ from typing import List, Dict, Any
 import os
 from webdataset import TarWriter
 import filelock
-
+from pathlib import Path
 
 class RepeatedDatasetWrapper(Dataset):
     def __init__(self, original_dataset, num_repeats):
@@ -216,3 +216,10 @@ class GroupedShardWriter:
                 with open(shard_number_file, "w") as f:
                     f.write(str(shard_number + 1))
         return shard_number
+
+def split_mi_data_paths(root):
+    data_paths = sorted(list(Path(root).glob('*.npz')))
+    train_data_paths = data_paths[:8]
+    val_data_path = [data_paths[8]]
+    test_data_path = [data_paths[9]]
+    return train_data_paths, val_data_path, test_data_path

@@ -25,3 +25,9 @@ det:
   input_alphas: [0., 0.5]
   target_alphas: [0.5, 0.5]
   keep: ['random', 'random']
+tok_rgb1@32:
+  input_alphas: [0., 0.5]
+  target_alphas: [0.5, 0.5]
+tok_rgb2@32:
+  input_alphas: [0., 0.5]
+  target_alphas: [0.5, 0.5]

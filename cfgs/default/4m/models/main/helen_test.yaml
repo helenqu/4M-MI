@@ -15,11 +15,11 @@ model: fm_base_12e_12d_swiglu_nobias
 patch_size: 16
 input_size: 224
 dtype: bfloat16
-tokenizer_path: "fourm/utils/tokenizer/trained/text_tokenizer_4m_wordpiece_30k.json"
+text_tokenizer_path: "fourm/utils/tokenizer/trained/text_tokenizer_4m_wordpiece_30k.json" # irrelevant since we have no text modalities
 
 # Train
-epochs: -1
-total_tokens: 500 # in billions
+epochs: -1 # either set this
+total_tokens: 500 # or set this and it will calculate the appropriate number of epochs
 opt: adamw
 blr: 0.0001 # this is base_lr = 1e-4, lr = base_lr * batch_size / 256
 min_blr: 0.
@@ -35,10 +35,10 @@ epoch_size: 10_000_000 # Number of samples per "epoch"
 
 # Saving
 save_ckpt_freq: 1
-output_dir: 'output/auto'
+output_dir: '/mnt/ceph/users/hqu10/mi-4m/mi_outputs/auto'
 
 # Wandb
-log_wandb: False # Set to True to log to Weights & Biases
+log_wandb: True # Set to True to log to Weights & Biases
 wandb_project: '4m-train'
 wandb_entity: null # Change if needed
 wandb_run_name: auto

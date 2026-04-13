@@ -197,9 +197,13 @@ class ImageTransform(AbstractTransform):
 
 class RGBTransform(ImageTransform):
 
-    def __init__(self, imagenet_default_mean_and_std=True, color_jitter=False, color_jitter_strength=0.5):
-        self.rgb_mean = IMAGENET_INCEPTION_MEAN if not imagenet_default_mean_and_std else IMAGENET_DEFAULT_MEAN
-        self.rgb_std = IMAGENET_INCEPTION_STD if not imagenet_default_mean_and_std else IMAGENET_DEFAULT_STD
+    def __init__(self, imagenet_default_mean_and_std=True, color_jitter=False, color_jitter_strength=0.5, custom_mean=None, custom_std=None):
+        if custom_mean is not None and custom_std is not None and not imagenet_default_mean_and_std:
+            self.rgb_mean = custom_mean
+            self.rgb_std = custom_std
+        else:
+            self.rgb_mean = IMAGENET_INCEPTION_MEAN if not imagenet_default_mean_and_std else IMAGENET_DEFAULT_MEAN
+            self.rgb_std = IMAGENET_INCEPTION_STD if not imagenet_default_mean_and_std else IMAGENET_DEFAULT_STD
         self.color_jitter = color_jitter
         self.color_jitter_transform = self.random_color_jitter(color_jitter_strength)
 

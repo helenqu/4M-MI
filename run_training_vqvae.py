@@ -62,6 +62,8 @@ from fourm.data import (CenterCropImageAugmenter, RandomCropImageAugmenter, NoIm
 from fourm.data.modality_transforms import (UnifiedDataTransform, RGBTransform,
                                             NormalTransform, SAMInstanceTransform)
 from fourm.data.multimodal_dataset_folder import MultiModalDatasetFolder
+from fourm.data.mi_dataset import MIDataset
+from fourm.data.dataset_utils import split_mi_data_paths
 from fourm.data.modality_info import MODALITY_INFO, MODALITY_TRANSFORMS_DIVAE
 from fourm.utils import ModelEmaV2 as ModelEma
 from fourm.utils import NativeScalerWithGradNormCount as NativeScaler
@@ -236,6 +238,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument('--mask_value', default=None, type=float,
                         help='Optionally set masked-out regions to this value after data augs (default: %(default)s)') 
     parser.add_argument('--data_path', default=None, type=str, help='dataset path')
+    parser.add_argument('--val_split', default=0.2, type=float, help='validation split')
     parser.add_argument('--eval_data_path', default=None, type=str, help='dataset path')
     parser.add_argument('--imagenet_default_mean_and_std', default=False, action='store_true')
     parser.add_argument('--standardize_surface_normals', default=False, action='store_true')
@@ -245,6 +248,7 @@ def get_args() -> argparse.Namespace:
                         help='Cache file paths in data_path/dataloader_cache for faster Dataset initialization (default: %(default)s)')
     
     parser.add_argument('--use_wds', action='store_true', help='webdatasets')
+    parser.add_argument('--use_np_shards', action='store_true', help='MI dataset is stored in np shards')
     parser.add_argument('--no_use_wds', action='store_false', dest='use_wds')
     parser.set_defaults(use_wds=False)
     parser.add_argument('--s3_endpoint', default='', type=str, help='S3 endpoint URL')
@@ -335,10 +339,15 @@ def get_args() -> argparse.Namespace:
         with open(args_config.config, 'r') as f:
             cfg = yaml.safe_load(f)
             parser.set_defaults(**cfg)
+    
+    # Override defaults from config file with explicit command line args
+    explicit_args = {k: v for k, v in vars(args_config).items() if v is not None and k != 'config'}
+    parser.set_defaults(**explicit_args)
 
     # The main arg parser parses the rest of the args, the usual
     # defaults will have been overridden if config file specified.
     args = parser.parse_args(remaining)
+    print(args.data_path)
 
     # Add the config path as a final args if given
     args.config_path = args_config.config
@@ -573,6 +582,33 @@ def main(args: argparse.Namespace) -> None:
 
         
         num_training_steps_per_epoch = args.dataset_size // (args.batch_size * num_tasks)
+    elif args.use_np_shards:
+        transforms_train = UnifiedDataTransform(transforms_dict=MODALITY_TRANSFORMS_DIVAE, image_augmenter=image_augmenter_train)
+        train_data_paths, val_data_path, test_data_path = split_mi_data_paths(args.data_path)
+        dataset_train = MIDataset(train_data_paths, transform=transforms_train)
+        dataset_val = MIDataset(val_data_path, transform=transforms_train)
+        
+        num_training_steps_per_epoch = len(dataset_train) // (args.batch_size * num_tasks)
+        sampler_train = torch.utils.data.DistributedSampler(
+            dataset_train, num_replicas=num_tasks, rank=sampler_rank, shuffle=True, drop_last=True,
+        )
+        sampler_val = torch.utils.data.SequentialSampler(dataset_val)
+        print("Sampler_train = %s" % str(sampler_train))
+
+        data_loader_train = torch.utils.data.DataLoader(
+            dataset_train, sampler=sampler_train,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            pin_memory=args.pin_mem,
+            drop_last=True,
+        )
+        data_loader_val = torch.utils.data.DataLoader(
+            dataset_val, sampler=sampler_val,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            pin_memory=args.pin_mem,
+            drop_last=False,
+        )
     else:
         transforms_train = UnifiedDataTransform(transforms_dict=MODALITY_TRANSFORMS_DIVAE, image_augmenter=image_augmenter_train)
         dataset_train = MultiModalDatasetFolder(root=args.data_path, modalities=args.all_domains, modality_paths=modality_paths, 
@@ -583,6 +619,7 @@ def main(args: argparse.Namespace) -> None:
             dataset_train, num_replicas=num_tasks, rank=sampler_rank, shuffle=True, drop_last=True,
         )
         print("Sampler_train = %s" % str(sampler_train))
+        sampler_val = torch.utils.data.SequentialSampler(dataset_val)
 
         data_loader_train = torch.utils.data.DataLoader(
             dataset_train, sampler=sampler_train,
@@ -590,6 +627,13 @@ def main(args: argparse.Namespace) -> None:
             num_workers=args.num_workers,
             pin_memory=args.pin_mem,
             drop_last=True,
+        )
+        data_loader_val = torch.utils.data.DataLoader(
+            dataset_val, sampler=sampler_val,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            pin_memory=args.pin_mem,
+            drop_last=False,
         )
 
     if args.eval_data_path:
@@ -704,6 +748,7 @@ def main(args: argparse.Namespace) -> None:
     print("Number of training examples per epoch = %d" % (total_batch_size * num_training_steps_per_epoch))
 
     if args.distributed:
+        print(f"Using DDP with GPU {args.gpu}")
         model = DDP(model, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
         model_without_ddp = model.module
         if feature_extractor is not None:

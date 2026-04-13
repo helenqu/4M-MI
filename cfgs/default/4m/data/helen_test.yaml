@@ -4,8 +4,8 @@ train:
       type: multimodal
 
       # Input and output domain names, separated by hyphen
-      in_domains: rgb@224-tok_rgb@224
-      out_domains: tok_rgb@224
+      in_domains: tok_rgb1@32-tok_rgb2@32
+      out_domains: tok_rgb1@32-tok_rgb2@32
 
       # Dirichlet alphas concentration parameter for input and output. 
       # Can be either one value, or one value per input modality separated by hyphen.
@@ -21,19 +21,21 @@ train:
       # Data can either be local or on cloud storage (e.g. S3), see data docs for more info
       # Use braceexpand notation to indicate shard range (e.g. shard-{0000..9999}.tar)
       # Use brackets to indicate multiple modalities (e.g. [modality1,modality2,modality3]) 
-      data_path: '/mnt/home/hqu10/ceph/test_4m_dataset' 
+      data_path: '/mnt/home/hqu10/ceph/mi-4m/mi_datasets/Case2_rho0999/tokenized/[crop_settings,rgb1,rgb2]/shard-{000000..000009}.tar'
       use_wds: True # Use webdataset
       wds_n_repeats: 4 # Number of repeats for webdataset loader to improve efficiency
       wds_shuffle_buffer_tar: 1_000 # Webdatasets shuffle buffer after loading tar files
       wds_shuffle_buffer_repeat: 1_000 # Webdatasets shuffle buffer after repeating samples
       
-      main_augment_domain: rgb@224 # Select from which modality to get the original full image size (mostly important for resizing bounding boxes)
+      # main_augment_domain: rgb@224 # should be the raw images i think?
+      main_augment_domain: tok_rgb@224 # Select from which modality to get the original full image size (mostly important for resizing bounding boxes)
       aligned_captions: True # Align captions to crop_settings
       tok_train_aug: True # Apply data augmentation to tokens (if multiple crop settings are available)
 
       modality_name_map: # Use modality_name_map to define a mapping from a folder name to a modality name
-        rgb: rgb@224
-        rgb_tokenized_wds: tok_rgb@224
+        # rgb: rgb@224
+        rgb1: tok_rgb1@32
+        rgb2: tok_rgb2@32
       #   ...
 
   weights: [1.0] # Sampling weights for the training datasets

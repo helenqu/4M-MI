@@ -37,6 +37,7 @@ from fourm.data.modality_info import MODALITY_TRANSFORMS_DIVAE
 from fourm.vq import get_image_tokenizer
 import fourm.utils.clip as clip
 from fourm.data.dataset_utils import GroupedShardWriter
+from fourm.data.mi_dataset import MIDataset
 FEATURE_TASKS = ['CLIP-B16', 'DINOv2-B14', 'DINOv2-B14-global']
 IMG_EXTENSIONS = (".jpg", ".jpeg", ".png", ".ppm", ".bmp", ".pgm", ".tif", ".tiff", ".webp", ".jpx", ".gif")
     
@@ -69,7 +70,8 @@ class SaveVQDataset(Dataset):
                  resample_mode: str = 'bilinear',
                  corrupt_samples_log: Optional[str] = None,
                  dryrun: bool = False,
-                 force_load_crop: bool = False):
+                 force_load_crop: bool = False,
+                 use_np_shards: bool = False):
         super().__init__()
         
         self.data_root = root
@@ -87,14 +89,20 @@ class SaveVQDataset(Dataset):
         self.dryrun = dryrun
         self.force_load_crop = force_load_crop
         
-        self.loader = lambda path: Image.open(path)
+        self.use_np_shards = use_np_shards
         
-        self.classes, self.class_to_idx = find_classes(os.path.join(root, task))
-        if corrupt_samples_log is not None:
-            task_ext = find_image_extension(os.path.join(root, task))
-            self.samples = self.get_corrupt_samples(corrupt_samples_log, task_ext)
+        if self.use_np_shards:
+            data_paths = list(Path(root).glob('*.npz'))
+            self.samples = MIDataset(data_paths)
         else:
-            self.samples = make_dataset(os.path.join(root, task), self.class_to_idx, IMG_EXTENSIONS, None)
+            self.loader = lambda path: Image.open(path)
+        
+            self.classes, self.class_to_idx = find_classes(os.path.join(root, task)) # these vars aren't used
+            if corrupt_samples_log is not None:
+                task_ext = find_image_extension(os.path.join(root, task))
+                self.samples = self.get_corrupt_samples(corrupt_samples_log, task_ext)
+            else:
+                self.samples = make_dataset(os.path.join(root, task), self.class_to_idx, IMG_EXTENSIONS, None)
         
         self.center_crop_augmenter = CenterCropImageAugmenter(
             target_size=self.input_size, hflip=0.0, main_domain=task
@@ -129,22 +137,31 @@ class SaveVQDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, index):        
-        path, _ = self.samples[index]
-        img = self.loader(path)
-        img = img.convert("RGB") if self.task in ['rgb', 'normal'] else img
-        
-        class_id, file_id = path.split('/')[-2:]
-        file_id = file_id.split('.')[0]
+        if self.use_np_shards:
+            sample = self.samples[index]
+            raw = sample[self.task]
+            raw = (raw * 255).astype(np.uint8).transpose(1, 2, 0)
+            img = Image.fromarray(raw)
 
-        if self.mask_value is not None:
-            mask_path = os.path.join(self.data_root, 'mask_valid', class_id, f'{file_id}.png')
-            mask = Image.open(mask_path)
+            tokens_path = str(Path(self.tokens_root) / sample['id'])
+            crop_settings_path = str(Path(self.crop_settings_root) / sample['id']) # placeholder, this should never exist/be used
+        else:
+            path, _ = self.samples[index]
+            img = self.loader(path)
+            img = img.convert("RGB") if 'rgb' in self.task or 'normal' in self.task else img
+            
+            class_id, file_id = path.split('/')[-2:]
+            file_id = file_id.split('.')[0]
 
-        tokens_path = os.path.join(self.tokens_root, class_id, f'{file_id}.npy')
-        if not self.dryrun:
-            os.makedirs(os.path.dirname(tokens_path), exist_ok=True)
+            if self.mask_value is not None:
+                mask_path = os.path.join(self.data_root, 'mask_valid', class_id, f'{file_id}.png')
+                mask = Image.open(mask_path)
 
-        crop_settings_path = os.path.join(self.crop_settings_root, class_id, f'{file_id}.npy')
+            tokens_path = os.path.join(self.tokens_root, class_id, f'{file_id}.npy')
+            if not self.dryrun:
+                os.makedirs(os.path.dirname(tokens_path), exist_ok=True)
+
+            crop_settings_path = os.path.join(self.crop_settings_root, class_id, f'{file_id}.npy')
 
         # Create or load crop settings
         if os.path.exists(crop_settings_path) or self.force_load_crop:
@@ -197,7 +214,7 @@ class SaveVQDataset(Dataset):
         return imgs, tokens_path, settings
 
 def get_feature_extractor(args):
-    if args.task == 'CLIP-B16' or args.task == 'rgb':
+    if args.task == 'CLIP-B16' or 'rgb' in args.task:
         teacher_model, _ = clip.load("ViT-B/16", device='cpu', jit=False)
         teacher_model = teacher_model.visual
         return teacher_model.eval()
@@ -226,11 +243,14 @@ def main(args):
 
     loader_task = 'rgb' if args.task in FEATURE_TASKS else args.task
     # dataset = SaveVQDataset(root=os.path.join(args.data_root, args.split), crop_settings_dir='crop_settings', 
+    #TODO s (7/15): need to get this to work with rgb1 vs rgb2
+    # - need a unique identifier for each sample (as tokens_path), figure out how it's used downstream in 4M
     dataset = SaveVQDataset(root=args.data_root, crop_settings_dir='crop_settings', 
                             tokens_dir=f'{args.task}_{args.folder_suffix}', task=loader_task,
                             min_crop_scale=args.min_crop_scale, n_crops=args.n_crops, 
                             input_size=args.input_size, mask_value=args.mask_value,
-                            resample_mode=args.resample_mode, corrupt_samples_log=args.corrupt_samples_log, force_load_crop=args.force_load_crop)
+                            resample_mode=args.resample_mode, corrupt_samples_log=args.corrupt_samples_log,
+                            force_load_crop=args.force_load_crop, use_np_shards=args.use_np_shards)
     
     sampler = torch.utils.data.DistributedSampler(dataset, num_replicas=num_tasks, rank=sampler_rank, shuffle=False)
     data_loader = torch.utils.data.DataLoader(dataset, sampler=sampler, batch_size=args.batch_size_dataloader,
@@ -288,7 +308,8 @@ def main(args):
         imgs_batch = imgs_batch.to(device)
         
         with torch.no_grad():
-            if 'CLIP' in args.task or 'rgb' in args.task:
+            if 'CLIP' in args.task:
+                # pdb.set_trace()
                 B, C, H, W = imgs_batch.shape
                 P_H, P_W = feature_extractor.conv1.kernel_size
                 N_H, N_W = H // P_H, W // P_W
@@ -315,6 +336,7 @@ def main(args):
         tokens = rearrange(tokens, '(b n) d -> b n d', n=args.n_crops)
 
         print(f"current batch size: {tokens.shape[0]}")
+        # TODO: args.task should be the modality name, but is it actually "npy"?
         for j in range(tokens.shape[0]):
             data_to_write = {
                 args.task: {
@@ -435,6 +457,9 @@ if __name__ == '__main__':
 
     parser.add_argument('--force_load_crop', action='store_true',
                         help='Make sure to load crops locally, otherwise break the code.')
+    
+    parser.add_argument('--use_np_shards', action='store_true',
+                        help='read from sharded numpy dataset')
 
     args = parser.parse_args()
     print("Force loading existing crop settings: {}".format(args.force_load_crop))

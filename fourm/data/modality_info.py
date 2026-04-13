@@ -43,11 +43,47 @@ MODALITY_INFO = {
         'id': generate_uint15_hash('rgb@224'),
         'path': 'rgb',
     },
+    'rgb1@32': {
+        'input_size': 32,
+        'patch_size': 4,
+        'encoder_embedding': partial(ImageEncoderEmbedding, num_channels=3),
+        'decoder_embedding': None,
+        'min_tokens': 0,
+        'max_tokens': None, # Will be set to 196
+        'type': 'img',
+        'num_channels': 3,
+        'id': generate_uint15_hash('rgb1@32'),
+        'path': 'rgb1',
+    },
+    'rgb2@32': {
+        'input_size': 32,
+        'patch_size': 4,
+        'encoder_embedding': partial(ImageEncoderEmbedding, num_channels=3),
+        'decoder_embedding': None,
+        'min_tokens': 0,
+        'max_tokens': None, # Will be set to 196
+        'type': 'img',
+        'num_channels': 3,
+        'id': generate_uint15_hash('rgb2@32'),
+        'path': 'rgb2',
+    },
     'rgb': { # used for tokenizer training
         'type': 'img',
         'num_channels': 3,
         'id': generate_uint15_hash('rgb'),
         'path': 'rgb',
+    },
+    'rgb1': { # used for tokenizer training, MI modality 1
+        'type': 'img',
+        'num_channels': 3,
+        'id': generate_uint15_hash('rgb1'),
+        'path': 'rgb1',
+    },
+    'rgb2': { # used for tokenizer training, MI modality 2
+        'type': 'img',
+        'num_channels': 3,
+        'id': generate_uint15_hash('rgb2'),
+        'path': 'rgb2',
     },
     'caption': {
         'vocab_size': 30_000,
@@ -66,6 +102,32 @@ MODALITY_INFO = {
         'max_tokens': 256,
         'type': 'seq',
         'id': generate_uint15_hash('det'),
+    },
+    'tok_rgb1@32': {
+        'input_size': 32,
+        'patch_size': 4,
+        'vocab_size': 16384,
+        'encoder_embedding': partial(ImageTokenEncoderEmbedding, vocab_size=16384),
+        'decoder_embedding': partial(ImageTokenDecoderEmbedding, vocab_size=16384),
+        'min_tokens': 0,
+        'max_tokens': None, # Will be set to 196
+        'type': 'img',
+        'id': generate_uint15_hash('tok_rgb1@32'),
+        'pretokenized': True,
+        # 'path': 'rgb1',
+    },
+    'tok_rgb2@32': {
+        'input_size': 32,
+        'patch_size': 4,
+        'vocab_size': 16384,
+        'encoder_embedding': partial(ImageTokenEncoderEmbedding, vocab_size=16384),
+        'decoder_embedding': partial(ImageTokenDecoderEmbedding, vocab_size=16384),
+        'min_tokens': 0,
+        'max_tokens': None, # Will be set to 196
+        'type': 'img',
+        'id': generate_uint15_hash('tok_rgb2@32'),
+        'pretokenized': True,
+        # 'path': 'rgb2',
     },
     'tok_rgb@224': {
         'input_size': 224,
@@ -386,9 +448,13 @@ MODALITY_INFO = {
 MODALITY_TRANSFORMS = {
     # 4M-7 modalities
     'rgb': RGBTransform(imagenet_default_mean_and_std=True),
+    'rgb1': RGBTransform(imagenet_default_mean_and_std=False, custom_mean=data_constants.MI_RGB1_MEAN, custom_std=data_constants.MI_RGB1_STD),
+    'rgb2': RGBTransform(imagenet_default_mean_and_std=False, custom_mean=data_constants.MI_RGB2_MEAN, custom_std=data_constants.MI_RGB2_STD),
     'caption': CaptionTransform(aligned_captions=True),
     'det': DetectionTransform(det_threshold=0.6, det_max_instances=None, bbox_order='dist_to_orig', coord_bins=1000, min_visibility=0.0),
     'tok_rgb': TokTransform(),
+    'tok_rgb1': TokTransform(),
+    'tok_rgb2': TokTransform(),
     'tok_depth': TokTransform(),
     'tok_normal': TokTransform(),
     'tok_semseg': TokTransform(),
@@ -411,6 +477,8 @@ MODALITY_TRANSFORMS = {
 
 MODALITY_TRANSFORMS_DIVAE = {
     'rgb': RGBTransform(imagenet_default_mean_and_std=False),
+    'rgb1': RGBTransform(imagenet_default_mean_and_std=False, custom_mean=data_constants.MI_RGB1_MEAN, custom_std=data_constants.MI_RGB1_STD),
+    'rgb2': RGBTransform(imagenet_default_mean_and_std=False, custom_mean=data_constants.MI_RGB2_MEAN, custom_std=data_constants.MI_RGB2_STD),
     'depth': DepthTransform(standardize_depth=True),
     'normal': NormalTransform(standardize_surface_normals=False),
     'mask_valid': MaskTransform(mask_pool_size=1),

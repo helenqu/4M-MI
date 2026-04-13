@@ -510,8 +510,12 @@ def main(args):
     print("Number of training steps = %d" % num_training_steps_per_epoch)
     print("Number of training examples per epoch = %d" % (batch_size_no_accum * num_training_steps_per_epoch))
 
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[global_rank], find_unused_parameters=args.find_unused_params)
-    model_without_ddp = model.module
+    if args.distributed:
+        print(f"distributed training")
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[global_rank], find_unused_parameters=args.find_unused_params)
+        model_without_ddp = model.module
+    else:
+        model_without_ddp = model
 
     optimizer = create_optimizer(args, model_without_ddp)
     loss_scaler = NativeScaler(enabled=dtype == torch.float16)
@@ -597,8 +601,8 @@ def main(args):
 
     ## Training
     print(f"Start training for {args.epochs} epochs")
-    start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
+        start_time = time.time()
         if log_writer is not None:
             log_writer.set_step(epoch * num_training_steps_per_epoch)
         train_stats = train_one_epoch(
@@ -668,10 +672,9 @@ def main(args):
         if args.output_dir and utils.is_main_process():
             with open(os.path.join(args.output_dir, "log.txt"), mode="a", encoding="utf-8") as f:
                 f.write(json.dumps(log_stats) + "\n")
-
-    total_time = time.time() - start_time
-    total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-    print('Training time {}'.format(total_time_str))
+        
+        if epoch == args.start_epoch:
+            print(f"expected time remaining for {args.epochs - epoch} epochs: {(time.time() - start_time) * (args.epochs - (epoch + 1))}")
 
 
 def train_one_epoch(model: torch.nn.Module, data_loader: Iterable, optimizer: torch.optim.Optimizer,
@@ -682,20 +685,21 @@ def train_one_epoch(model: torch.nn.Module, data_loader: Iterable, optimizer: to
                     output_dir=None, compute_grad_norm=True, total_batch_size=None):
     
     model.train()
+    model_without_ddp = model.module if args.distributed else model
+
     if frozen_model_epochs > 0 and epoch < frozen_model_epochs:
         if args.frozen_embedding_domain is None:
-            model.module.freeze_shared_params()
-        
+            model_without_ddp.freeze_shared_params()        
         else:
-            model.module.freeze_params_except_specific_embeddings(args.frozen_embedding_domain)
+            model_without_ddp.freeze_params_except_specific_embeddings(args.frozen_embedding_domain)
     else:
-        model.module.unfreeze_all()
+        model_without_ddp.unfreeze_all()
 
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('min_lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
-    print_freq = 10
+    print_freq = 1000
 
     for step, x in enumerate(metric_logger.log_every(data_loader, print_freq, iter_len=loader_len, header=header)):
         # Assign learning rate & weight decay for each step

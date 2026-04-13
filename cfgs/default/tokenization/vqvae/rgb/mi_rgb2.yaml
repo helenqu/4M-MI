@@ -1,12 +1,14 @@
-run_name: auto
+# rgb2: second image from Raheem's dataset
+
+run_name: rgb2_tokenizer
 
 # Architecture
 encoder_type: vit_b_enc
 decoder_type: vit_b_dec
-input_size_min: 224
-input_size_max: 224
-resolution_step: 16
-patch_size: 16
+input_size_min: 32
+input_size_max: 32
+resolution_step: 4 # irrelevant if input_size_min == input_size_max
+patch_size: 4 
 post_mlp: True # tanh MLP before quantizer
 
 # Quantizer
@@ -38,7 +40,7 @@ blr: 0.0001 # base_lr = 1e-4, lr = base_lr * batch_size / 256
 warmup_lr: 0.000001 # 1e-6
 min_lr: 0.
 warmup_epochs: 5
-batch_size: 64 # per GPU
+batch_size: 128 # 64 for 40gb GPU, 128 for 80gb GPU
 hflip: 0.5
 clip_grad: 1.0
 model_ema: True
@@ -53,20 +55,21 @@ epoch_eval: False
 eval_freq: 5000
 eval_metrics_freq: 5000
 eval_image_log_freq: 5000
-num_eval_metrics_samples: 50000 # Number of samples to use for evaluating image metrics during training.
+# num_eval_metrics_samples: 50000 # Number of samples to use for evaluating image metrics during training.
 num_logged_images: 100
 input_size_eval: 224
 
 # Data
-domain: rgb
+domain: rgb2
 imagenet_default_mean_and_std: False # Normalize to [-1,1]
 min_crop_scale: 0.8
-data_path: '/path/to/dataset' # Change me
-eval_data_path: '/path/to/eval_dataset' # Change me
+data_path: '/mnt/ceph/users/hqu10/mi_datasets/Case_4' 
+use_np_shards: True
+# eval_data_path: '/path/to/eval_dataset' # Change me
 
 # Wandb
-log_wandb: False # Set to True to log to Weights & Biases
+log_wandb: True # Set to True to log to Weights & Biases
 wandb_project: '4m-tokenizers'
 wandb_entity: null # Change if needed
 wandb_run_name: auto
-output_dir: 'output/auto'
+output_dir: '/mnt/ceph/users/hqu10/mi_outputs/auto'

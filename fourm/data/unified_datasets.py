@@ -18,6 +18,7 @@ import os
 import re
 from functools import partial
 from typing import Any, Callable, Dict, Iterable, List, Optional
+import pdb
 
 import braceexpand
 import numpy as np
@@ -85,7 +86,6 @@ def build_fm_pretraining_dataset(
         modality_transforms["crop_settings"] = CropSettingsTransform()
 
     modality_paths = {mod: modality_info[mod]['path'] for mod in modality_info if modality_info[mod].get('path', None) is not None}
-    print(f"modality_paths: {modality_paths}")
     return MultiModalDatasetFolder(root=data_path, modalities=modalities_without_vq, modality_paths=modality_paths,
                                    modality_transforms=modality_transforms, transform=transform)
 
@@ -259,8 +259,9 @@ def multi_tarfile_samples(src_iter: Iterable[Dict[str, Any]],
     Yields:
         Dictionary of aligned samples from all modalities.
     """
+    # print(f"src_iter: {src_iter}", flush=True)
     for src in src_iter:
-        
+        # print(f"src: {src}", flush=True)
         # Multi tar file URLs use brace expansion with square braces
         multi_tar_urls = src['url'].translate(str.maketrans('[]', '{}'))
         modality_names = extract_modality_names(multi_tar_urls)
@@ -274,10 +275,10 @@ def multi_tarfile_samples(src_iter: Iterable[Dict[str, Any]],
         else:
             # Remaining cases where multiple modalities are specified, e.g. shard_dir/[foo,bar]/shard00000.tar
             multi_tar_urls = list(braceexpand.braceexpand(multi_tar_urls))
-
         # Create tar iterators for shards of all modalities
         tar_iters = [wds.tarfile_samples([{'url': tar_url}]) for tar_url in multi_tar_urls]
-        
+        # print(f"multi_tar_urls: {multi_tar_urls}", flush=True)
+        # print(f"modality_names: {modality_names}", flush=True)
         try:
             # Loop over these iterators in parallel and combine the tar files from different modalities
             for multi_tar_files in zip(*tar_iters):
@@ -287,6 +288,8 @@ def multi_tarfile_samples(src_iter: Iterable[Dict[str, Any]],
                 merged_dict['__url__'] = src['url']
                 
                 for modality_name, modality_dict in zip(modality_names, multi_tar_files):
+                    # print(f"modality_name: {modality_name}", flush=True)
+                    # print(f"modality_dict: {modality_dict}", flush=True)
                     _key = modality_dict.pop('__key__')
                     _url = modality_dict.pop('__url__')
 
@@ -295,16 +298,17 @@ def multi_tarfile_samples(src_iter: Iterable[Dict[str, Any]],
                         
                     tar_is_multimodal = len(modality_dict) > 1
                     for k, v in modality_dict.items():
-                        if tar_is_multimodal or check_dots(k) or modality_name is None:
-                            # We don't change the keys in the following cases:
-                            # 1. The shard contains multiple modalities. Then they *have* to follow the idx.modality_id.ext convention
-                            # 2. If any key contains a dot, this means it already has the idx.modality_id.ext format (idx. is already removed at this stage)
-                            # 3. If the modality name is None, no modality folder was specified (see beginning of function)
-                            merged_dict[k] = v
+                        if k != 'npy.npy' and k != 'npy':
+                            if tar_is_multimodal or check_dots(k) or modality_name is None:
+                                # We don't change the keys in the following cases:
+                                # 1. The shard contains multiple modalities. Then they *have* to follow the idx.modality_id.ext convention
+                                # 2. If any key contains a dot, this means it already has the idx.modality_id.ext format (idx. is already removed at this stage)
+                                # 3. If the modality name is None, no modality folder was specified (see beginning of function)
+                                merged_dict[k] = v
                         else:
                             mapped_name = modality_name if modality_name_map is None else modality_name_map.get(modality_name, modality_name)
-                            merged_dict[f'{mapped_name}.{k}'] = v
-
+                            merged_dict[f'{mapped_name}.{k.split(".")[-1]}'] = v # adds npy to the end which tells the decoder what to do
+                            # merged_dict[mapped_name] = v
                 yield merged_dict
 
         except Exception as e:
@@ -347,6 +351,12 @@ def build_wds_fm_pretraining_dataloader(
     """
 
     modality_paths = {mod: modality_info[mod].get('path', None) or mod for mod in modality_info}
+    # HQ: i added this modality_name_map integration, not sure if this is how it's meant to be used
+    # if modality_name_map is not None:
+    #     # usually goes path -> modality name
+    #     modality_name_map_reversed = {v: k for k, v in modality_name_map.items()}
+    #     for mod in modality_name_map_reversed:
+    #         modality_paths[mod] = modality_name_map_reversed[mod]
 
     # Remove vq domains that require a tokenizer
     modalities_without_vq = [mod for mod in all_domains if not modality_info[mod].get("requires_tokenizer", False)]
@@ -356,6 +366,8 @@ def build_wds_fm_pretraining_dataloader(
         modality_transforms = copy.deepcopy(modality_transforms)
         modality_transforms["crop_settings"] = CropSettingsTransform()
         modality_paths["crop_settings"] = "crop_settings"
+    # TODO: this is a hack to get rid of crop_settings from the modality_paths
+    # modality_paths = {k: v for k, v in modality_paths.items() if k != "crop_settings"}
 
     # Webdatasets always adds __key__ to the dictionary, so we add a transform that does nothing with it
     modality_transforms["__key__"] = IdentityTransform()
